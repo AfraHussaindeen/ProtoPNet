@@ -2,7 +2,7 @@ import time
 import torch
 
 from helpers import list_of_distances, make_one_hot
-from settings import num_prototypes
+from settings import idx_to_class, feature_groups
 # Evaluation metrics
 from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_score
 
@@ -72,12 +72,12 @@ def _train_or_test(
                 prototype_class_identity = model.module.prototype_class_identity
                 t_prototype_class_identity = torch.t(prototype_class_identity)
                 prototypes_of_correct_class = []
-                prototypes_of_correct_class_min_distances = []
+                # prototypes_of_correct_class_min_distances = []
 
                 for i in range(label.size()[0]):
 
                     i_label = label[i]
-                    i_min_distances = min_distances[i]
+                    # i_min_distances = min_distances[i]
 
                     indices = ((i_label == 1).nonzero(as_tuple=True)[0])
                     i_prototypes_of_correct_class = t_prototype_class_identity[indices]
@@ -85,22 +85,30 @@ def _train_or_test(
 
                     prototypes_of_correct_class.append(i_prototypes_of_correct_class)
 
-                    i_prototypes_of_correct_class_min_distances = []
+                #     i_prototypes_of_correct_class_min_distances = []
+                #
+                #     # enforce the model to have atleast one similar prototype
+                #     for index in indices:
+                #         inverted_distance = torch.max(
+                #             (max_dist - i_min_distances) * t_prototype_class_identity[index]
+                #         )
+                #         i_prototypes_of_correct_class_min_distances.append(max_dist - inverted_distance)
+                #
+                #     prototypes_of_correct_class_min_distances.append(i_prototypes_of_correct_class_min_distances)
+                #
+                # prototypes_of_correct_class_min_distances = torch.tensor(prototypes_of_correct_class_min_distances)
 
-                    # enforce the model to have atleast one similar prototype
-                    for index in indices:
-                        inverted_distance = torch.max(
-                            (max_dist - i_min_distances) * t_prototype_class_identity[index]
-                        )
-                        i_prototypes_of_correct_class_min_distances.append(max_dist - inverted_distance)
-
-                    prototypes_of_correct_class_min_distances.append(i_prototypes_of_correct_class_min_distances)
-
-                prototypes_of_correct_class_min_distances = torch.tensor(prototypes_of_correct_class_min_distances)
-
-                cluster_cost = torch.mean(prototypes_of_correct_class_min_distances)
+                # cluster_cost = torch.mean(prototypes_of_correct_class_min_distances)
 
                 prototypes_of_correct_class = torch.stack(prototypes_of_correct_class, dim=0)
+
+                # calculate cluster cost
+                inverted_distances_to_target_prototypes, _ = torch.max(
+                    (max_dist - min_distances) * prototypes_of_correct_class, dim=1
+                )
+                cluster_cost = torch.mean(
+                    max_dist - inverted_distances_to_target_prototypes
+                )
 
                 # calculate separation cost
                 prototypes_of_wrong_class = 1 - prototypes_of_correct_class
@@ -117,16 +125,16 @@ def _train_or_test(
                 ) / torch.sum(prototypes_of_wrong_class, dim=1)
                 avg_separation_cost = torch.mean(avg_separation_cost)
 
-                # if use_l1_mask:
-                #     l1_mask = 1 - torch.t(model.module.prototype_class_identity).cuda()
-                #     l1 = (model.module.last_layer.weight * l1_mask).norm(p=1)
-                # else:
-                #     l1 = model.module.last_layer.weight.norm(p=1)
+                if use_l1_mask:
+                    l1_mask = 1 - torch.t(model.module.prototype_class_identity).cuda()
+                    l1 = (model.module.last_layer.weight * l1_mask).norm(p=1)
+                else:
+                    l1 = model.module.last_layer.weight.norm(p=1)
 
             else:
                 min_distance, _ = torch.min(min_distances, dim=1)
                 cluster_cost = torch.mean(min_distance)
-                # l1 = model.module.last_layer.weight.norm(p=1)
+                l1 = model.module.last_layer.weight.norm(p=1)
 
             # evaluation statistics
             _, predicted = torch.max(output.data, 1)
@@ -153,25 +161,24 @@ def _train_or_test(
                             coefs["crs_ent"] * cross_entropy
                             + coefs["clst"] * cluster_cost
                             + coefs["sep"] * separation_cost
-                            # + coefs["l1"] * l1
+                            + coefs["l1"] * l1
                     )
                 else:
                     loss = (
                             cross_entropy
                             + 0.8 * cluster_cost
                             - 0.08 * separation_cost
-                            # + 1e-4 * l1
+                            + 1e-4 * l1
                     )
             else:
                 if coefs is not None:
                     loss = (
                             coefs["crs_ent"] * cross_entropy
                             + coefs["clst"] * cluster_cost
-                            # + coefs["l1"] * l1
+                            + coefs["l1"] * l1
                     )
                 else:
-                    # loss = cross_entropy + 0.8 * cluster_cost + 1e-4 * l1
-                    loss = cross_entropy + 0.8 * cluster_cost
+                    loss = cross_entropy + 0.8 * cluster_cost + 1e-4 * l1
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
