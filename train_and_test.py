@@ -25,31 +25,29 @@ def _train_or_test(
     is_train = optimizer is not None
     start = time.time()
 
-    pred_list = torch.tensor([], dtype=int)
-    target_list = torch.tensor([], dtype=int)
+    pred_list = torch.tensor([])
+    target_list = torch.tensor([])
 
-    # n_examples = 0
-    # n_correct = 0
     n_batches = 0
     total_cross_entropy = 0
     total_cluster_cost = 0
+
     # separation cost is meaningful only for class_specific
     total_separation_cost = 0
     total_avg_separation_cost = 0
 
     for i, j in enumerate(dataloader):
-        print (i)
         image = j.get('image')
-        label = j.get('label')
-        input = image.cuda()
-        target = label.cuda()
+        target = j.get('label')
+        image = image.cuda()
+        target = target.cuda()
 
         # torch.enable_grad() has no effect outside of no_grad()
         grad_req = torch.enable_grad() if is_train else torch.no_grad()
         with grad_req:
             # nn.Module has implemented __call__() function
             # so no need to call .forward
-            output, min_distances = model(input)
+            output, min_distances = model(image)
             min_distances = min_distances.cpu()
 
             # compute loss
@@ -74,9 +72,9 @@ def _train_or_test(
                 prototypes_of_correct_class = []
                 # prototypes_of_correct_class_min_distances = []
 
-                for i in range(label.size()[0]):
+                for i in range(target.size()[0]):
 
-                    i_label = label[i]
+                    i_label = target[i]
                     # i_min_distances = min_distances[i]
 
                     indices = ((i_label == 1).nonzero(as_tuple=True)[0])
@@ -137,11 +135,14 @@ def _train_or_test(
                 l1 = model.module.last_layer.weight.norm(p=1)
 
             # evaluation statistics
-            _, predicted = torch.max(output.data, 1)
-            predicted = predicted.to("cpu")
-            target = target.to("cpu")
+            # _, predicted = torch.max(output.data, 1)
+            # predicted = predicted.to("cpu")
+            # target = target.to("cpu")
 
-            pred_list = torch.cat([pred_list, predicted])
+            output = output.cpu()
+            target = target.cpu()
+
+            pred_list = torch.cat([pred_list, output])
             target_list = torch.cat([target_list, target])
 
             # n_examples += target.size(0)
@@ -183,15 +184,17 @@ def _train_or_test(
             loss.backward()
             optimizer.step()
 
-        del input
+        del image
         del target
         del output
-        del predicted
         del min_distances
 
     end = time.time()
 
-    class_metrics = get_performance(pred_list, target_list, labels)
+    class_metrics = get_featurewise_predictions(pred_list, target_list)
+
+    del pred_list
+    del target_list
 
     log("\ttime: \t{0}".format(end - start))
     log("\tcross ent: \t{0}".format(total_cross_entropy / n_batches))
@@ -206,7 +209,7 @@ def _train_or_test(
         p_avg_pair_dist = torch.mean(list_of_distances(p, p))
     log("\tp dist pair: \t{0}".format(p_avg_pair_dist.item()))
 
-    return class_metrics["accuracy"]
+    return class_metrics["pn"]["accuracy"]
 
 
 def train(
@@ -300,6 +303,37 @@ def get_performance(predictions, targets, labels):
     return class_metric
 
 
-def get_featurewise_predictions(predictions, targets, labels):
+def get_featurewise_predictions(outputs, targets):
+    metric = {}
+    for feature_name in list(feature_groups.keys()):
 
-    return
+        feature_metric = {}
+        feature_sub_category =[]
+
+        for i in feature_groups[feature_name]:
+            feature_sub_category.append(idx_to_class[i])
+
+        feature_output = torch.max(outputs[:, feature_groups[feature_name][0]:feature_groups[feature_name][-1]+1], dim=1).indices
+        feature_target = torch.max(targets[:, feature_groups[feature_name][0]:feature_groups[feature_name][-1]+1], dim=1).indices
+
+        feature_accuracy = accuracy_score(feature_target, feature_output)
+
+        feature_precision = list(precision_score(feature_target, feature_output,
+                                                 labels=list(range(len(feature_sub_category))),
+                                                 average=None))
+
+        feature_recall = list(recall_score(feature_target, feature_output,
+                                                 labels=list(range(len(feature_sub_category))),
+                                                 average=None))
+
+        feature_metric['accuracy'] = feature_accuracy
+
+        for i in range(len(feature_sub_category)):
+            feature_metric[feature_sub_category[i]] = {
+                'precision': feature_precision[i],
+                'recall': feature_recall[i],
+            }
+
+        metric[feature_name] = feature_metric
+
+    return metric
