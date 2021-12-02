@@ -48,7 +48,8 @@ def _train_or_test(
             # nn.Module has implemented __call__() function
             # so no need to call .forward
             output, min_distances = model(image)
-            min_distances = min_distances.cpu()
+            output = output.cuda()
+            min_distances = min_distances.cuda()
 
             # compute loss
             cross_entropy = torch.nn.functional.binary_cross_entropy(output, target)
@@ -67,15 +68,15 @@ def _train_or_test(
                 #     model.module.prototype_class_identity[:, label]
                 # ).cuda()
 
-                prototype_class_identity = model.module.prototype_class_identity
+                prototype_class_identity = model.module.prototype_class_identity.cuda()
                 t_prototype_class_identity = torch.t(prototype_class_identity)
                 prototypes_of_correct_class = []
-                # prototypes_of_correct_class_min_distances = []
+                prototypes_of_correct_class_min_distances = torch.tensor([]).cuda()
 
                 for i in range(target.size()[0]):
 
                     i_label = target[i]
-                    # i_min_distances = min_distances[i]
+                    i_min_distances = min_distances[i]
 
                     indices = ((i_label == 1).nonzero(as_tuple=True)[0])
                     i_prototypes_of_correct_class = t_prototype_class_identity[indices]
@@ -83,30 +84,33 @@ def _train_or_test(
 
                     prototypes_of_correct_class.append(i_prototypes_of_correct_class)
 
-                #     i_prototypes_of_correct_class_min_distances = []
-                #
-                #     # enforce the model to have atleast one similar prototype
-                #     for index in indices:
-                #         inverted_distance = torch.max(
-                #             (max_dist - i_min_distances) * t_prototype_class_identity[index]
-                #         )
-                #         i_prototypes_of_correct_class_min_distances.append(max_dist - inverted_distance)
-                #
-                #     prototypes_of_correct_class_min_distances.append(i_prototypes_of_correct_class_min_distances)
-                #
-                # prototypes_of_correct_class_min_distances = torch.tensor(prototypes_of_correct_class_min_distances)
+                    i_prototypes_of_correct_class_min_distances = torch.tensor([]).cuda()
 
-                # cluster_cost = torch.mean(prototypes_of_correct_class_min_distances)
+                    # enforce the model to have atleast one similar prototype
+                    for index in indices:
+                        inverted_distance = torch.max(
+                            (max_dist - i_min_distances) * t_prototype_class_identity[index]
+                        )
+
+                        i_prototypes_of_correct_class_min_distances = torch.cat(
+                            [i_prototypes_of_correct_class_min_distances,
+                             torch.unsqueeze((max_dist - inverted_distance), 0)])
+
+                    prototypes_of_correct_class_min_distances = torch.cat([
+                        prototypes_of_correct_class_min_distances,
+                        i_prototypes_of_correct_class_min_distances])
+
+                cluster_cost = torch.mean(prototypes_of_correct_class_min_distances)
 
                 prototypes_of_correct_class = torch.stack(prototypes_of_correct_class, dim=0)
 
                 # calculate cluster cost
-                inverted_distances_to_target_prototypes, _ = torch.max(
-                    (max_dist - min_distances) * prototypes_of_correct_class, dim=1
-                )
-                cluster_cost = torch.mean(
-                    max_dist - inverted_distances_to_target_prototypes
-                )
+                # inverted_distances_to_target_prototypes, _ = torch.max(
+                #     (max_dist - min_distances) * prototypes_of_correct_class, dim=1
+                # )
+                # cluster_cost = torch.mean(
+                #     max_dist - inverted_distances_to_target_prototypes
+                # )
 
                 # calculate separation cost
                 prototypes_of_wrong_class = 1 - prototypes_of_correct_class
