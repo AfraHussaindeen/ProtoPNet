@@ -8,6 +8,7 @@ import time
 
 from receptive_field import compute_rf_prototype
 from helpers import makedir, find_high_activation_crop
+from settings import feature_groups
 
 # push each prototype to the nearest patch in the training set
 def push_prototypes(dataloader, # pytorch dataloader (must be unnormalized in [0,1])
@@ -73,11 +74,15 @@ def push_prototypes(dataloader, # pytorch dataloader (must be unnormalized in [0
 
     num_classes = prototype_network_parallel.module.num_classes
 
-    for push_iter, (search_batch_input, search_y) in enumerate(dataloader):
+    for push_iter, search in enumerate(dataloader):
         '''
         start_index_of_search keeps track of the index of the image
         assigned to serve as prototype
         '''
+
+        search_batch_input = search.get('image')
+        search_y = search.get('label')
+
         start_index_of_search_batch = push_iter * search_batch_size
 
         update_prototypes_on_batch(search_batch_input,
@@ -151,10 +156,13 @@ def update_prototypes_on_batch(search_batch_input,
 
     if class_specific:
         class_to_img_index_dict = {key: [] for key in range(num_classes)}
-        # img_y is the image's integer label
+        # img_y is the image's multi label tensor
         for img_index, img_y in enumerate(search_y):
-            img_label = img_y.item()
-            class_to_img_index_dict[img_label].append(img_index)
+            # feature_y_idx_list is the list of indices of the relevant feature classes
+            feature_y_idx_list = (img_y == 1.0).nonzero(as_tuple=True)[0]
+            for feature_y_idx in feature_y_idx_list:
+                img_label = feature_y_idx.item()
+                class_to_img_index_dict[img_label].append(img_index)
 
     prototype_shape = prototype_network_parallel.module.prototype_shape
     n_prototypes = prototype_shape[0]
@@ -172,6 +180,11 @@ def update_prototypes_on_batch(search_batch_input,
             if len(class_to_img_index_dict[target_class]) == 0:
                 continue
             proto_dist_j = proto_dist_[class_to_img_index_dict[target_class]][:,j,:,:]
+
+            # identify the feature group | dermatology specific
+            for feature in list(feature_groups.keys()):
+                if j in feature_groups[feature]:
+                    feature_main_name = feature
         else:
             # if it is not class specific, then we will search through
             # every example
@@ -227,7 +240,10 @@ def update_prototypes_on_batch(search_batch_input,
             proto_rf_boxes[j, 3] = rf_prototype_j[3]
             proto_rf_boxes[j, 4] = rf_prototype_j[4]
             if proto_rf_boxes.shape[1] == 6 and search_y is not None:
-                proto_rf_boxes[j, 5] = search_y[rf_prototype_j[0]].item()
+                feature_sub_idx_list = feature_groups[feature_main_name]
+                feature_sub_start_idx = feature_sub_idx_list[0]
+                _, i = torch.max(search_y[rf_prototype_j[0]][feature_sub_idx_list], dim=0)
+                proto_rf_boxes[j, 5] = feature_sub_start_idx + i.item()
 
             # find the highly activated region of the original image
             proto_dist_img_j = proto_dist_[img_index_in_batch, j, :, :]
@@ -251,7 +267,10 @@ def update_prototypes_on_batch(search_batch_input,
             proto_bound_boxes[j, 3] = proto_bound_j[2]
             proto_bound_boxes[j, 4] = proto_bound_j[3]
             if proto_bound_boxes.shape[1] == 6 and search_y is not None:
-                proto_bound_boxes[j, 5] = search_y[rf_prototype_j[0]].item()
+                feature_sub_idx_list = feature_groups[feature_main_name]
+                feature_sub_start_idx = feature_sub_idx_list[0]
+                _, i = torch.max(search_y[rf_prototype_j[0]][feature_sub_idx_list], dim=0)
+                proto_rf_boxes[j, 5] = feature_sub_start_idx + i.item()
 
             if dir_for_saving_prototypes is not None:
                 if prototype_self_act_filename_prefix is not None:
