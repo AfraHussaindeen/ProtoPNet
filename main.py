@@ -110,7 +110,7 @@ train_loader = DataLoader(
 
 # train push data loader
 train_push_loader = DataLoader(
-    train_dataset,
+    train_push_dataset,
     batch_size=train_batch_size,
     shuffle=False,
     num_workers=2,
