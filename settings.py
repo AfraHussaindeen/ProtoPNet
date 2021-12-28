@@ -7,6 +7,18 @@ top_k_percentage = 10
 prototype_activation_function = "log"
 add_on_layers_type = "regular"
 
+idx_to_class = {0:'bwv_absent', 1:'bwv_present',
+                2:'dag_absent', 3:'dag_irregular', 4:'dag_regular',
+                5:'pig_absent', 6: 'pig_irregular', 7:'pig_regular',
+                8:'pn_absent', 9:'pn_atypical', 10:'pn_typical',
+                11:'rs_absent', 12:'rs_present',
+                13:'str_absent', 14:'str_irregular', 15:'str_regular'}
+feature_groups = {'bwv':[0,1],
+                  'dag':[2,3,4] ,
+                  'pig':[5,6,7],
+                  'pn':[8,9,10],
+                  'rs': [11,12],
+                  'str': [13,14,15]}
 experiment_run = '003'
 
 data_csv_path = 'one_hot_dataset.csv'

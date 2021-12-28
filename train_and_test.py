@@ -2,7 +2,7 @@ import time
 import torch
 
 from helpers import list_of_distances, make_one_hot
-from settings import num_prototypes
+from settings import idx_to_class, feature_groups
 # Evaluation metrics
 from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_score
 
@@ -25,32 +25,31 @@ def _train_or_test(
     is_train = optimizer is not None
     start = time.time()
 
-    pred_list = torch.tensor([], dtype=int)
-    target_list = torch.tensor([], dtype=int)
+    pred_list = torch.tensor([])
+    target_list = torch.tensor([])
 
-    # n_examples = 0
-    # n_correct = 0
     n_batches = 0
     total_cross_entropy = 0
     total_cluster_cost = 0
+
     # separation cost is meaningful only for class_specific
     total_separation_cost = 0
     total_avg_separation_cost = 0
 
     for i, j in enumerate(dataloader):
-        print (i)
         image = j.get('image')
-        label = j.get('label')
-        input = image.cuda()
-        target = label.cuda()
+        target = j.get('label')
+        image = image.cuda()
+        target = target.cuda()
 
         # torch.enable_grad() has no effect outside of no_grad()
         grad_req = torch.enable_grad() if is_train else torch.no_grad()
         with grad_req:
             # nn.Module has implemented __call__() function
             # so no need to call .forward
-            output, min_distances = model(input)
-            min_distances = min_distances.cpu()
+            output, min_distances = model(image)
+            output = output.cuda()
+            min_distances = min_distances.cuda()
 
             # compute loss
             cross_entropy = torch.nn.functional.binary_cross_entropy(output, target)
@@ -69,14 +68,14 @@ def _train_or_test(
                 #     model.module.prototype_class_identity[:, label]
                 # ).cuda()
 
-                prototype_class_identity = model.module.prototype_class_identity
+                prototype_class_identity = model.module.prototype_class_identity.cuda()
                 t_prototype_class_identity = torch.t(prototype_class_identity)
                 prototypes_of_correct_class = []
-                prototypes_of_correct_class_min_distances = []
+                prototypes_of_correct_class_min_distances = torch.tensor([]).cuda()
 
-                for i in range(label.size()[0]):
+                for i in range(target.size()[0]):
 
-                    i_label = label[i]
+                    i_label = target[i]
                     i_min_distances = min_distances[i]
 
                     indices = ((i_label == 1).nonzero(as_tuple=True)[0])
@@ -85,22 +84,33 @@ def _train_or_test(
 
                     prototypes_of_correct_class.append(i_prototypes_of_correct_class)
 
-                    i_prototypes_of_correct_class_min_distances = []
+                    i_prototypes_of_correct_class_min_distances = torch.tensor([]).cuda()
 
                     # enforce the model to have atleast one similar prototype
                     for index in indices:
                         inverted_distance = torch.max(
                             (max_dist - i_min_distances) * t_prototype_class_identity[index]
                         )
-                        i_prototypes_of_correct_class_min_distances.append(max_dist - inverted_distance)
 
-                    prototypes_of_correct_class_min_distances.append(i_prototypes_of_correct_class_min_distances)
+                        i_prototypes_of_correct_class_min_distances = torch.cat(
+                            [i_prototypes_of_correct_class_min_distances,
+                             torch.unsqueeze((max_dist - inverted_distance), 0)])
 
-                prototypes_of_correct_class_min_distances = torch.tensor(prototypes_of_correct_class_min_distances)
+                    prototypes_of_correct_class_min_distances = torch.cat([
+                        prototypes_of_correct_class_min_distances,
+                        i_prototypes_of_correct_class_min_distances])
 
                 cluster_cost = torch.mean(prototypes_of_correct_class_min_distances)
 
                 prototypes_of_correct_class = torch.stack(prototypes_of_correct_class, dim=0)
+
+                # calculate cluster cost
+                # inverted_distances_to_target_prototypes, _ = torch.max(
+                #     (max_dist - min_distances) * prototypes_of_correct_class, dim=1
+                # )
+                # cluster_cost = torch.mean(
+                #     max_dist - inverted_distances_to_target_prototypes
+                # )
 
                 # calculate separation cost
                 prototypes_of_wrong_class = 1 - prototypes_of_correct_class
@@ -117,23 +127,26 @@ def _train_or_test(
                 ) / torch.sum(prototypes_of_wrong_class, dim=1)
                 avg_separation_cost = torch.mean(avg_separation_cost)
 
-                # if use_l1_mask:
-                #     l1_mask = 1 - torch.t(model.module.prototype_class_identity).cuda()
-                #     l1 = (model.module.last_layer.weight * l1_mask).norm(p=1)
-                # else:
-                #     l1 = model.module.last_layer.weight.norm(p=1)
+                if use_l1_mask:
+                    l1_mask = 1 - torch.t(model.module.prototype_class_identity).cuda()
+                    l1 = (model.module.last_layer.weight * l1_mask).norm(p=1)
+                else:
+                    l1 = model.module.last_layer.weight.norm(p=1)
 
             else:
                 min_distance, _ = torch.min(min_distances, dim=1)
                 cluster_cost = torch.mean(min_distance)
-                # l1 = model.module.last_layer.weight.norm(p=1)
+                l1 = model.module.last_layer.weight.norm(p=1)
 
             # evaluation statistics
-            _, predicted = torch.max(output.data, 1)
-            predicted = predicted.to("cpu")
-            target = target.to("cpu")
+            # _, predicted = torch.max(output.data, 1)
+            # predicted = predicted.to("cpu")
+            # target = target.to("cpu")
 
-            pred_list = torch.cat([pred_list, predicted])
+            output = output.cpu()
+            target = target.cpu()
+
+            pred_list = torch.cat([pred_list, output])
             target_list = torch.cat([target_list, target])
 
             # n_examples += target.size(0)
@@ -153,38 +166,39 @@ def _train_or_test(
                             coefs["crs_ent"] * cross_entropy
                             + coefs["clst"] * cluster_cost
                             + coefs["sep"] * separation_cost
-                            # + coefs["l1"] * l1
+                            + coefs["l1"] * l1
                     )
                 else:
                     loss = (
                             cross_entropy
                             + 0.8 * cluster_cost
                             - 0.08 * separation_cost
-                            # + 1e-4 * l1
+                            + 1e-4 * l1
                     )
             else:
                 if coefs is not None:
                     loss = (
                             coefs["crs_ent"] * cross_entropy
                             + coefs["clst"] * cluster_cost
-                            # + coefs["l1"] * l1
+                            + coefs["l1"] * l1
                     )
                 else:
-                    # loss = cross_entropy + 0.8 * cluster_cost + 1e-4 * l1
-                    loss = cross_entropy + 0.8 * cluster_cost
+                    loss = cross_entropy + 0.8 * cluster_cost + 1e-4 * l1
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-        del input
+        del image
         del target
         del output
-        del predicted
         del min_distances
 
     end = time.time()
 
-    class_metrics = get_performance(pred_list, target_list, labels)
+    class_metrics = get_featurewise_predictions(pred_list, target_list)
+
+    del pred_list
+    del target_list
 
     log("\ttime: \t{0}".format(end - start))
     log("\tcross ent: \t{0}".format(total_cross_entropy / n_batches))
@@ -199,7 +213,7 @@ def _train_or_test(
         p_avg_pair_dist = torch.mean(list_of_distances(p, p))
     log("\tp dist pair: \t{0}".format(p_avg_pair_dist.item()))
 
-    return class_metrics["accuracy"]
+    return class_metrics["pn"]["accuracy"]
 
 
 def train(
@@ -293,6 +307,37 @@ def get_performance(predictions, targets, labels):
     return class_metric
 
 
-def get_featurewise_predictions(predictions, targets, labels):
+def get_featurewise_predictions(outputs, targets):
+    metric = {}
+    for feature_name in list(feature_groups.keys()):
 
-    return
+        feature_metric = {}
+        feature_sub_category =[]
+
+        for i in feature_groups[feature_name]:
+            feature_sub_category.append(idx_to_class[i])
+
+        feature_output = torch.max(outputs[:, feature_groups[feature_name][0]:feature_groups[feature_name][-1]+1], dim=1).indices
+        feature_target = torch.max(targets[:, feature_groups[feature_name][0]:feature_groups[feature_name][-1]+1], dim=1).indices
+
+        feature_accuracy = accuracy_score(feature_target, feature_output)
+
+        feature_precision = list(precision_score(feature_target, feature_output,
+                                                 labels=list(range(len(feature_sub_category))),
+                                                 average=None))
+
+        feature_recall = list(recall_score(feature_target, feature_output,
+                                                 labels=list(range(len(feature_sub_category))),
+                                                 average=None))
+
+        feature_metric['accuracy'] = feature_accuracy
+
+        for i in range(len(feature_sub_category)):
+            feature_metric[feature_sub_category[i]] = {
+                'precision': feature_precision[i],
+                'recall': feature_recall[i],
+            }
+
+        metric[feature_name] = feature_metric
+
+    return metric
