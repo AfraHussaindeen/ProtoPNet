@@ -1,7 +1,7 @@
 base_architecture = 'resnet152'
 img_size = 224
-num_prototypes = 4
-num_classes = 16
+num_prototypes = 3
+num_classes = 10 # Number of unique classes to learn prototypes (Excluding absent classes)
 prototype_shape = (num_prototypes * num_classes, 128, 1, 1)
 top_k_percentage = 10
 prototype_activation_function = "log"
@@ -13,12 +13,38 @@ idx_to_class = {0:'bwv_absent', 1:'bwv_present',
                 8:'pn_absent', 9:'pn_atypical', 10:'pn_typical',
                 11:'rs_absent', 12:'rs_present',
                 13:'str_absent', 14:'str_irregular', 15:'str_regular'}
+
 feature_groups = {'bwv':[0,1],
                   'dag':[2,3,4] ,
                   'pig':[5,6,7],
                   'pn':[8,9,10],
                   'rs': [11,12],
                   'str': [13,14,15]}
+
+num_labels = 6
+num_subclass_labels = {
+    0 : 2,
+    1 : 3,
+    2 : 3,
+    3 : 3,
+    4 : 2,
+    5 : 3
+}
+
+class_labels = {0 : 'bwv',
+                1 : 'dag',
+                2 : 'pig',
+                3 : 'pn',
+                4 : 'rs',
+                5: 'str'}
+
+features = {'bwv':['absent','present'],
+              'dag':['absent', 'irregular', 'regular'] ,
+              'pig':['absent', 'irregular', 'regular'] ,
+              'pn':['absent', 'atypical', 'typical'],
+              'rs': ['absent','present'],
+              'str': ['absent', 'irregular', 'regular'] }
+
 experiment_run = '003'
 
 data_csv_path = 'one_hot_dataset.csv'

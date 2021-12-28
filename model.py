@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
-from settings import top_k_percentage
+from settings import top_k_percentage, num_labels, num_subclass_labels
 
 from resnet_features import (
     resnet18_features,
@@ -69,6 +69,8 @@ class PPNet(nn.Module):
         self.prototype_shape = prototype_shape
         self.num_prototypes = prototype_shape[0]
         self.num_classes = num_classes
+        self.num_labels = num_labels
+        self.num_subclass_labels = num_subclass_labels
         self.epsilon = 1e-4
 
         # prototype_activation_function could be 'log', 'linear',
@@ -162,9 +164,18 @@ class PPNet(nn.Module):
         # since it will not be moved automatically to gpu
         self.ones = nn.Parameter(torch.ones(self.prototype_shape), requires_grad=False)
 
-        self.last_layer = nn.Linear(
-            self.num_prototypes, self.num_classes, bias=False
-        )  # do not use bias
+        # For each label, a separate fully connected layer is maintained
+        self.last_layers = []
+        for i in range(num_labels):
+            self.last_layers.append(
+                    nn.Linear( self.num_prototypes, self.num_subclass_labels[i], bias=False), # do not use bias
+            )
+
+
+
+        # self.last_layer = nn.Linear(
+        #     self.num_prototypes, self.num_classes, bias=False
+        # )  # do not use bias
 
         if init_weights:
             self._initialize_weights()
@@ -262,10 +273,18 @@ class PPNet(nn.Module):
         min_distances = torch.mean(top_k_min_distances, dim=2)
 
         prototype_activations = self.distance_2_similarity(min_distances)
-        logits = self.last_layer(prototype_activations)
-        sig_layer = nn.Sigmoid()
-        output = sig_layer(logits)
-        return output, min_distances
+
+        confidences = []
+        for i , last_layer in enumerate (self.last_layers):
+            logits = last_layer(prototype_activations)
+            confidence = nn.Softmax(dim=self.num_subclass_labels[i])(logits)
+            confidences.append(confidence)
+
+        # logits = self.last_layer(prototype_activations)
+        # sig_layer = nn.Sigmoid()
+        # output = sig_layer(logits)
+
+        return confidences, min_distances
 
     def push_forward(self, x):
         """this method is needed for the pushing operation"""
@@ -292,9 +311,10 @@ class PPNet(nn.Module):
 
         # changing self.last_layer in place
         # changing in_features and out_features make sure the numbers are consistent
-        self.last_layer.in_features = self.num_prototypes
-        self.last_layer.out_features = self.num_classes
-        self.last_layer.weight.data = self.last_layer.weight.data[:, prototypes_to_keep]
+        for i, last_layer in enumerate(self.last_layers):
+            last_layer.in_features = self.num_prototypes
+            last_layer.out_features = self.num_subclass_labels[i]
+            last_layer.weight.data = last_layer.weight.data[:, prototypes_to_keep]
 
         # self.ones is nn.Parameter
         self.ones = nn.Parameter(
@@ -338,10 +358,12 @@ class PPNet(nn.Module):
 
         correct_class_connection = 1
         incorrect_class_connection = incorrect_strength
-        self.last_layer.weight.data.copy_(
-            correct_class_connection * positive_one_weights_locations
-            + incorrect_class_connection * negative_one_weights_locations
-        )
+
+        for i, last_layer in enumerate(self.last_layers):
+            last_layer.weight.data.copy_(
+                correct_class_connection * positive_one_weights_locations
+                + incorrect_class_connection * negative_one_weights_locations
+            )
 
     def _initialize_weights(self):
         for m in self.add_on_layers.modules():
@@ -363,8 +385,8 @@ def construct_PPNet(
     base_architecture,
     pretrained=True,
     img_size=224,
-    prototype_shape=(2000, 512, 1, 1),
-    num_classes=200,
+    prototype_shape=(30, 128, 1, 1),
+    num_classes=10,
     prototype_activation_function="log",
     add_on_layers_type="bottleneck",
 ):
