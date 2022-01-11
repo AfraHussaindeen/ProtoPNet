@@ -242,10 +242,16 @@ def _train_or_test(
 
     end = time.time()
 
-    class_metrics = get_featurewise_predictions(pred_list, target_list)
+    feature_metrics = get_featurewise_predictions(pred_list, target_list)
 
     del pred_list
     del target_list
+
+    #Compute the mean accuracy considering all the dermoscopic features
+    mean_accuracy = 0
+    for feature in list(features.keys()):
+        mean_accuracy += feature_metrics[feature]['accuracy']
+    mean_accuracy /= num_labels
 
     log("\ttime: \t{0}".format(end - start))
     log("\tcross ent: \t{0}".format(total_cross_entropy / n_batches))
@@ -253,14 +259,14 @@ def _train_or_test(
     if class_specific:
         log("\tseparation:\t{0}".format(total_separation_cost / n_batches))
         log("\tavg separation:\t{0}".format(total_avg_separation_cost / n_batches))
-    log("\tperformance: \t\t{}%".format(class_metrics))
+    log("\tperformance: \t\t{}%".format(feature_metrics))
     log("\tl1: \t\t{0}".format(model.module.last_layer.weight.norm(p=1).item()))
     p = model.module.prototype_vectors.view(model.module.num_prototypes, -1).cpu()
     with torch.no_grad():
         p_avg_pair_dist = torch.mean(list_of_distances(p, p))
     log("\tp dist pair: \t{0}".format(p_avg_pair_dist.item()))
 
-    return class_metrics["pn"]["accuracy"]
+    return mean_accuracy
 
 
 def train(
@@ -350,7 +356,6 @@ def get_performance(feature_output, feature_target, feature_name):
         }
 
     metric["accuracy"] = accuracy
-
 
     return metric
 
