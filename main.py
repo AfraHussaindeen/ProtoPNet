@@ -239,8 +239,10 @@ warm_optimizer_specs = [
 warm_optimizer = torch.optim.Adam(warm_optimizer_specs)
 
 last_layer_optimizer_specs = [
-    {"params": ppnet.last_layer.parameters(), "lr": last_layer_optimizer_lr}
+    {"params": (par for last_layer in ppnet.last_layers for par in last_layer.parameters() )
+        , "lr": last_layer_optimizer_lr}
 ]
+
 last_layer_optimizer = torch.optim.Adam(last_layer_optimizer_specs)
 
 # weighting of different training losses

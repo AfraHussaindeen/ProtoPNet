@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
-from settings import top_k_percentage, num_labels, num_subclass_labels
+from settings import top_k_percentage, num_labels, num_subclass_labels, prototype_label_start_idx
 
 from resnet_features import (
     resnet18_features,
@@ -354,15 +354,20 @@ class PPNet(nn.Module):
         the incorrect strength will be actual strength if -0.5 then input -0.5
         """
         positive_one_weights_locations = torch.t(self.prototype_class_identity)
-        negative_one_weights_locations = 1 - positive_one_weights_locations
+        # negative_one_weights_locations = 1 - positive_one_weights_locations
 
         correct_class_connection = 1
         incorrect_class_connection = incorrect_strength
 
         for i, last_layer in enumerate(self.last_layers):
+            positive_one_weights_locations_i = torch.cat([torch.zeros((1, self.num_prototypes)),
+                                                          positive_one_weights_locations[prototype_label_start_idx[i]:(
+                                                                      prototype_label_start_idx[i] +
+                                                                      num_subclass_labels[i] - 1), :]])
+            negative_one_weights_locations_i = 1 - positive_one_weights_locations_i
             last_layer.weight.data.copy_(
-                correct_class_connection * positive_one_weights_locations
-                + incorrect_class_connection * negative_one_weights_locations
+                correct_class_connection * positive_one_weights_locations_i
+                + incorrect_class_connection * negative_one_weights_locations_i
             )
 
     def _initialize_weights(self):

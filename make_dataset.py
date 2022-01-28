@@ -51,7 +51,6 @@ class ImageDataset(Dataset):
         return len(self.image_names)
 
     def __convert_label_to_multi(self, label):
-        print(label)
         new_label = []
         types = {
             0: 2,
@@ -87,7 +86,6 @@ class ImageDataset(Dataset):
                     cat = self.idx_to_class[i]
                     new_label.append(l[cat])
             init_ind += v
-        print(new_label)
         return new_label
 
     def __getitem__(self, index):
