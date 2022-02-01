@@ -53,15 +53,15 @@ base_architecture_to_features = {
 
 class PPNet(nn.Module):
     def __init__(
-        self,
-        features,
-        img_size,
-        prototype_shape,
-        proto_layer_rf_info,
-        num_classes,
-        init_weights=True,
-        prototype_activation_function="log",
-        add_on_layers_type="bottleneck",
+            self,
+            features,
+            img_size,
+            prototype_shape,
+            proto_layer_rf_info,
+            num_classes,
+            init_weights=True,
+            prototype_activation_function="log",
+            add_on_layers_type="bottleneck",
     ):
 
         super(PPNet, self).__init__()
@@ -113,7 +113,7 @@ class PPNet(nn.Module):
             add_on_layers = []
             current_in_channels = first_add_on_layer_in_channels
             while (current_in_channels > self.prototype_shape[1]) or (
-                len(add_on_layers) == 0
+                    len(add_on_layers) == 0
             ):
                 current_out_channels = max(
                     self.prototype_shape[1], (current_in_channels // 2)
@@ -168,10 +168,9 @@ class PPNet(nn.Module):
         self.last_layers = []
         for i in range(num_labels):
             self.last_layers.append(
-                    nn.Linear( self.num_prototypes, self.num_subclass_labels[i], bias=False), # do not use bias
+                nn.Linear(self.num_prototypes, self.num_subclass_labels[i], bias=False),  # do not use bias
             )
-
-
+        self.last_layers = nn.ModuleList(self.last_layers)
 
         # self.last_layer = nn.Linear(
         #     self.num_prototypes, self.num_classes, bias=False
@@ -208,7 +207,7 @@ class PPNet(nn.Module):
 
         # use broadcast
         intermediate_result = (
-            -2 * weighted_inner_product + filter_weighted_norm2_reshape
+                -2 * weighted_inner_product + filter_weighted_norm2_reshape
         )
         # x2_patch_sum and intermediate_result are of the same shape
         distances = F.relu(input_patch_weighted_norm2 + intermediate_result)
@@ -274,17 +273,30 @@ class PPNet(nn.Module):
 
         prototype_activations = self.distance_2_similarity(min_distances)
 
-        confidences = []
-        for i , last_layer in enumerate (self.last_layers):
-            logits = last_layer(prototype_activations)
-            confidence = nn.Softmax(dim=self.num_subclass_labels[i])(logits)
-            confidences.append(confidence)
+        # for i , last_layer in enumerate (self.last_layers):
+        #     logits = last_layer(prototype_activations)
+        #     confidence = nn.Softmax(dim=1)(logits)
+        #     confidences.append(confidence)
 
-        # logits = self.last_layer(prototype_activations)
-        # sig_layer = nn.Sigmoid()
-        # output = sig_layer(logits)
+        # Last linear layer corresponding for dermoscopic feature BWV
+        bwv_confidences = nn.Softmax(dim=1)(self.last_layers[0](prototype_activations))
 
-        return confidences, min_distances
+        # Last linear layer corresponding for dermoscopic feature DAG
+        dag_confidences = nn.Softmax(dim=1)(self.last_layers[1](prototype_activations))
+
+        # Last linear layer corresponding for dermoscopic feature BWV
+        pig_confidences = nn.Softmax(dim=1)(self.last_layers[2](prototype_activations))
+
+        # Last linear layer corresponding for dermoscopic feature DAG
+        pn_confidences = nn.Softmax(dim=1)(self.last_layers[3](prototype_activations))
+
+        # Last linear layer corresponding for dermoscopic feature BWV
+        rs_confidences = nn.Softmax(dim=1)(self.last_layers[4](prototype_activations))
+
+        # Last linear layer corresponding for dermoscopic feature DAG
+        str_confidences = nn.Softmax(dim=1)(self.last_layers[5](prototype_activations))
+
+        return min_distances, bwv_confidences, dag_confidences, pig_confidences, pn_confidences, rs_confidences, str_confidences
 
     def push_forward(self, x):
         """this method is needed for the pushing operation"""
@@ -323,8 +335,8 @@ class PPNet(nn.Module):
         # self.prototype_class_identity is torch tensor
         # so it does not need .data access for value update
         self.prototype_class_identity = self.prototype_class_identity[
-            prototypes_to_keep, :
-        ]
+                                        prototypes_to_keep, :
+                                        ]
 
     def __repr__(self):
         # PPNet(self, features, img_size, prototype_shape,
@@ -362,8 +374,8 @@ class PPNet(nn.Module):
         for i, last_layer in enumerate(self.last_layers):
             positive_one_weights_locations_i = torch.cat([torch.zeros((1, self.num_prototypes)),
                                                           positive_one_weights_locations[prototype_label_start_idx[i]:(
-                                                                      prototype_label_start_idx[i] +
-                                                                      num_subclass_labels[i] - 1), :]])
+                                                                  prototype_label_start_idx[i] +
+                                                                  num_subclass_labels[i] - 1), :]])
             negative_one_weights_locations_i = 1 - positive_one_weights_locations_i
             last_layer.weight.data.copy_(
                 correct_class_connection * positive_one_weights_locations_i
@@ -387,13 +399,13 @@ class PPNet(nn.Module):
 
 
 def construct_PPNet(
-    base_architecture,
-    pretrained=True,
-    img_size=224,
-    prototype_shape=(30, 128, 1, 1),
-    num_classes=10,
-    prototype_activation_function="log",
-    add_on_layers_type="bottleneck",
+        base_architecture,
+        pretrained=True,
+        img_size=224,
+        prototype_shape=(30, 128, 1, 1),
+        num_classes=10,
+        prototype_activation_function="log",
+        add_on_layers_type="bottleneck",
 ):
     features = base_architecture_to_features[base_architecture](pretrained=pretrained)
     layer_filter_sizes, layer_strides, layer_paddings = features.conv_info()

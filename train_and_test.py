@@ -2,7 +2,7 @@ import time
 import torch
 
 from helpers import list_of_distances
-from settings import num_labels, class_labels, features,prototype_label_start_idx
+from settings import num_labels, class_labels, features, prototype_label_start_idx
 # Evaluation metrics
 from sklearn.metrics import accuracy_score, recall_score, f1_score, precision_score, roc_auc_score
 
@@ -25,7 +25,10 @@ def _train_or_test(
     is_train = optimizer is not None
     start = time.time()
 
-    pred_list = torch.tensor([])
+    pred_list = {}
+    for i in range(num_labels):
+        pred_list[class_labels[i]] = torch.tensor([])
+
     target_list = torch.tensor([])
 
     n_batches = 0
@@ -38,7 +41,7 @@ def _train_or_test(
 
     for i, j in enumerate(dataloader):
         image = j.get('image')
-        target = j.get('label') # [0,1,3,1,2,2]
+        target = j.get('label')  # [0,1,3,1,2,2]
         image = image.cuda()
         target = target.cuda()
 
@@ -47,20 +50,32 @@ def _train_or_test(
         with grad_req:
             # nn.Module has implemented __call__() function
             # so no need to call .forward
-            output, min_distances = model(image)
-            output = output.cuda()
+            min_distances, bwv_confidences, dag_confidences, pig_confidences, pn_confidences, \
+            rs_confidences, str_confidences = model(image)
+
+            bwv_confidences = bwv_confidences.cuda()
+            dag_confidences = dag_confidences.cuda()
+            pig_confidences = pig_confidences.cuda()
+            pn_confidences = pn_confidences.cuda()
+            rs_confidences = rs_confidences.cuda()
+            str_confidences = str_confidences.cuda()
             min_distances = min_distances.cuda()
 
             # compute loss
             cross_entropy_batch = 0
             cluster_loss_batch = 0
             separation_cost_batch = 0
-            avg_separation_cost_batch=0
+            avg_separation_cost_batch = 0
 
-            for i in range(num_labels) :#Loop through each label (dermoscopic feature)
+            # Compute cross entropy loss considering each criteria in the seven point checklist
+            cross_entropy_batch += torch.nn.functional.cross_entropy(bwv_confidences, target[:, 0])
+            cross_entropy_batch += torch.nn.functional.cross_entropy(dag_confidences, target[:, 1])
+            cross_entropy_batch += torch.nn.functional.cross_entropy(pig_confidences, target[:, 2])
+            cross_entropy_batch += torch.nn.functional.cross_entropy(pn_confidences, target[:, 3])
+            cross_entropy_batch += torch.nn.functional.cross_entropy(rs_confidences, target[:, 4])
+            cross_entropy_batch += torch.nn.functional.cross_entropy(str_confidences, target[:, 5])
 
-                # compute cross entropy loss
-                cross_entropy_batch += torch.nn.functional.cross_entropy(output[:,i], target[:,i])
+            for i in range(num_labels):  # Loop through each label (dermoscopic feature)
 
                 if class_specific:
                     max_dist = (
@@ -73,10 +88,10 @@ def _train_or_test(
 
                     # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
                     # for absent classes, it should be all zero tensor
-                    temp_target = target[:, i]+(prototype_start_idx-1)
-                    temp_target[temp_target<prototype_start_idx] == 0 # For implementation purpose
-                    prototypes_of_correct_class = torch.t(model.module.prototype_class_identity[:,temp_target ]).cuda()
-                    prototypes_of_correct_class[target[:, i]==0] = torch.zeros(prototypes_of_correct_class.size()[1])
+                    temp_target = target[:, i] + (prototype_start_idx - 1)
+                    temp_target[temp_target < prototype_start_idx] == 0  # For implementation purpose
+                    prototypes_of_correct_class = torch.t(model.module.prototype_class_identity[:, temp_target]).cuda()
+                    prototypes_of_correct_class[target[:, i] == 0] = torch.zeros(prototypes_of_correct_class.size()[1])
 
                     # calculate cluster cost
                     inverted_distances_to_target_prototypes, _ = torch.max(
@@ -115,7 +130,6 @@ def _train_or_test(
                     cluster_cost = torch.mean(min_distance)
                     cluster_loss_batch += cluster_cost
                     # l1 = model.module.last_layer.weight.norm(p=1)
-
 
             # if class_specific:
             #     max_dist = (
@@ -192,10 +206,21 @@ def _train_or_test(
             # predicted = predicted.to("cpu")
             # target = target.to("cpu")
 
-            output = output.cpu()
+            bwv_confidences = bwv_confidences.cpu()
+            dag_confidences = dag_confidences.cpu()
+            pig_confidences = pig_confidences.cpu()
+            pn_confidences = pn_confidences.cpu()
+            rs_confidences = rs_confidences.cpu()
+            str_confidences = str_confidences.cpu()
             target = target.cpu()
 
-            pred_list = torch.cat([pred_list, output])  # [[0.23,0.53,0.54] ... x6] | softmax values
+            # Get the prediction
+            pred_list['bwv'] = torch.cat([pred_list['bwv'], torch.max(bwv_confidences.data, 1)[1]])
+            pred_list['dag'] = torch.cat([pred_list['dag'], torch.max(dag_confidences.data, 1)[1]])
+            pred_list['pig'] = torch.cat([pred_list['pig'], torch.max(pig_confidences.data, 1)[1]])
+            pred_list['pn'] = torch.cat([pred_list['pn'], torch.max(pn_confidences.data, 1)[1]])
+            pred_list['rs'] = torch.cat([pred_list['rs'], torch.max(rs_confidences.data, 1)[1]])
+            pred_list['str'] = torch.cat([pred_list['str'], torch.max(str_confidences.data, 1)[1]])
             target_list = torch.cat([target_list, target])
 
             n_batches += 1
@@ -212,32 +237,37 @@ def _train_or_test(
                             coefs["crs_ent"] * cross_entropy_batch
                             + coefs["clst"] * cluster_loss_batch
                             + coefs["sep"] * separation_cost_batch
-                            # + coefs["l1"] * l1
+                        # + coefs["l1"] * l1
                     )
                 else:
                     loss = (
                             cross_entropy_batch
                             + 0.8 * cluster_loss_batch
                             - 0.08 * separation_cost_batch
-                            # + 1e-4 * l1
+                        # + 1e-4 * l1
                     )
             else:
                 if coefs is not None:
                     loss = (
                             coefs["crs_ent"] * cross_entropy_batch
                             + coefs["clst"] * cluster_loss_batch
-                            # + coefs["l1"] * l1
+                        # + coefs["l1"] * l1
                     )
                 else:
                     loss = cross_entropy_batch + 0.8 * cluster_loss_batch \
-                           # + 1e-4 * l1
+                        # + 1e-4 * l1
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
         del image
         del target
-        del output
+        del bwv_confidences
+        del dag_confidences
+        del pig_confidences
+        del pn_confidences
+        del rs_confidences
+        del str_confidences
         del min_distances
 
     end = time.time()
@@ -247,7 +277,7 @@ def _train_or_test(
     del pred_list
     del target_list
 
-    #Compute the mean accuracy considering all the dermoscopic features
+    # Compute the mean accuracy considering all the dermoscopic features
     mean_accuracy = 0
     for feature in list(features.keys()):
         mean_accuracy += feature_metrics[feature]['accuracy']
@@ -348,7 +378,7 @@ def get_performance(feature_output, feature_target, feature_name):
     precision = list(precision_score(outputs_final_label, feature_target, average=None))
     recall = list(recall_score(outputs_final_label, feature_target, average=None))
     f1 = list(f1_score(outputs_final_label, feature_target, average=None))
-    roc_auc = roc_auc_score(feature_target,feature_output, multi_class='ovr')
+    roc_auc = roc_auc_score(feature_target, feature_output, multi_class='ovr')
 
     for i, sub_category in enumerate(features[feature_name]):
         metric[sub_category] = {
@@ -369,8 +399,8 @@ def get_featurewise_predictions(outputs, targets):
     for i in range(len(num_labels)):
         feature_name = class_labels[i]
 
-        feature_output = outputs[:,i]
-        feature_target = targets[:,i]
+        feature_output = outputs[feature_name]
+        feature_target = targets[:, i]
 
         metric[feature_name] = get_performance(feature_output, feature_target, feature_name)
 
